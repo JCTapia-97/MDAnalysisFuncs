@@ -9,7 +9,7 @@ from MDAnalysis.analysis.hydrogenbonds.hbond_analysis import HydrogenBondAnalysi
 from MDAnalysis.analysis.base import (AnalysisBase,
                                       AnalysisFromFunction,
                                       analysis_class)
-
+from MDAnalysis.analysis import distances
 
 def density(topo, traj, pdb, ag1, last_frame, output_file_name):
     u = get_universe_with_names(topo, traj, pdb)
@@ -17,19 +17,19 @@ def density(topo, traj, pdb, ag1, last_frame, output_file_name):
 
     z = float(u.dimensions[2])
     bin_size = 2
-    num_bins = np.ceil(z / bin_size).astype(int)
+    num_bins = np.ceil(z/bin_size).astype(int) 
     x_graph = np.linspace(0, z, num_bins)
 
     water_ag = u.select_atoms(ag1)
 
-    water_udensity = lin.LinearDensity(water_ag, grouping='atoms', binsize=bin_size).run(start=-500)
+    water_udensity = lin.LinearDensity(water_ag, grouping='atoms', binsize=bin_size).run(start=last_frame)
     water_udens = water_udensity.results['z']['mass_density']
     plt.plot(x_graph, water_udens)
     plt.xlabel("Density Bin (2 Ang Binsize)")
     plt.ylabel("Mass Density (kg/m^3)")
     plt.savefig('Water_Density.png')
 
-    raw_data_file(x_graph, water_udens, "{}_water_density".format(output_file_name))
+    raw_data_file(x_graph, water_udens, "{}_density".format(output_file_name))
 
 
 def raw_data_file(x_values, y_values, output_file_name):
@@ -41,92 +41,28 @@ def raw_data_file(x_values, y_values, output_file_name):
 
 
 def radius_of_gyration(topo, traj, pdb_name, last_frames, output_file_name):
+
     last_frames = int(last_frames)
     u = get_universe_with_names(topo, traj, pdb_name)
     # u = Universe(topo, traj)
 
     ag1 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 864:1400")
-    ag2 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 1401:1937")
-    ag3 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 1938:2474")
-    ag4 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 2475:3011")
-    ag5 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 3012:3548")
-    ag6 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 3549:4085")
-    ag7 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 4086:4622")
-    ag8 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 4623:5159")
-    ag9 = u.select_atoms("(name C1 or name CHR or name CH2 or name Cin) and index 5160:5697")
 
     rog1 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag1, ag1.masses,
-                                total_mass=np.sum(ag1.masses))
+                               ag1, ag1.masses,
+                               total_mass=np.sum(ag1.masses))
 
     rog1.run(start=last_frames)
 
-    rog2 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag2, ag2.masses,
-                                total_mass=np.sum(ag2.masses))
+    rog_data = rog1.results['timeseries']
+    print(rog_data)
 
-    rog2.run(start=last_frames)
+    ensemble_rog = np.average(rog_data, axis=0)
 
-    rog3 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag3, ag3.masses,
-                                total_mass=np.sum(ag3.masses))
-
-    rog3.run(start=last_frames)
-
-    rog4 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag4, ag4.masses,
-                                total_mass=np.sum(ag4.masses))
-
-    rog4.run(start=last_frames)
-
-    rog5 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag5, ag5.masses,
-                                total_mass=np.sum(ag5.masses))
-
-    rog5.run(start=last_frames)
-
-    rog6 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag6, ag6.masses,
-                                total_mass=np.sum(ag6.masses))
-
-    rog6.run(start=last_frames)
-
-    rog7 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag7, ag7.masses,
-                                total_mass=np.sum(ag7.masses))
-
-    rog7.run(start=last_frames)
-
-    rog8 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag8, ag8.masses,
-                                total_mass=np.sum(ag8.masses))
-
-    rog8.run(start=last_frames)
-
-    rog9 = AnalysisFromFunction(radgyr, u.trajectory,
-                                ag9, ag9.masses,
-                                total_mass=np.sum(ag9.masses))
-
-    rog9.run(start=last_frames)
-
-    concat_data = [rog1.results['timeseries'], rog2.results['timeseries'], rog3.results['timeseries'],
-                                  rog4.results['timeseries'], rog5.results['timeseries'], rog6.results['timeseries'],
-                                  rog7.results['timeseries'], rog8.results['timeseries'], rog9.results['timeseries']]
-    concat_data = np.asarray(concat_data)
-    print(concat_data)
-
-    averaged_rog = np.average(concat_data, axis=0)
-    std_rog = np.std(concat_data, axis=0)
-
-    all_data = averaged_rog.T[0]
-    x_data = averaged_rog.T[1]
-    y_data = averaged_rog.T[2]
-    z_data = averaged_rog.T[3]
-
-    all_std = std_rog.T[0]
-    x_std = std_rog.T[1]
-    y_std = std_rog.T[2]
-    z_std = std_rog.T[3]
+    all_data = rog_data.T[0]
+    x_data = rog_data.T[1]
+    y_data = rog_data.T[2]
+    z_data = rog_data.T[3]
 
     # labels = ['all', 'x-axis', 'y-axis', 'z-axis']
     # for col, label in zip(rog.results['timeseries'].T, labels):
@@ -137,9 +73,30 @@ def radius_of_gyration(topo, traj, pdb_name, last_frames, output_file_name):
     # plt.savefig('{}_ROG.png'.format(output_file_name))
 
     timestep = np.linspace(1, np.absolute(last_frames), np.absolute(last_frames))
-    condensed_data = [timestep, all_data, all_std, x_data, x_std, y_data, y_std, z_data, z_std]
+    condensed_data = [timestep, all_data, x_data, y_data, z_data]
     condensed_data = np.asarray(condensed_data)
     np.savetxt("{}_ROG_raw_data.txt".format(output_file_name), condensed_data.T, delimiter=' ')
+    np.savetxt("{}_ROG_ensemble_data.txt".format(output_file_name), ensemble_rog.T, delimiter=' ')
+
+
+def end_to_end(topo, traj, pdb_name, last_frames, output_file_name):
+    last_frames = int(last_frames)
+    u = get_universe_with_names(topo, traj, pdb_name)
+
+    ag1 = u.select_atoms("(name C1 or name Cin) and index 864:1400")
+
+    ag1_dist = []
+
+    for ts in u.trajectory[last_frames:]:
+        ag1_dist.append(distances.self_distance_array(ag1.positions))
+    
+    ag1_dist = np.asarray(ag1_dist).flatten()
+
+    print(ag1_dist)
+
+    averaged_data = np.average(concat_data, axis=0)
+    np.savetxt("{}_E2E_raw_data.txt".format(output_file_name), ag1_dist.T)
+    np.savetxt("{}_E2E_ensemble_data.txt".format(output_file_name), averaged_data.reshape(1,), fmt='%f')
 
 
 def radgyr(atomgroup, masses, total_mass=None):
@@ -200,18 +157,20 @@ def get_universe_with_names(topo, traj, pdb_name):
     rows = [re.split(r'\s+', row) for row in pdb_lines]
     atom_names = [row[2] for row in rows]
 
-    u = Universe(topo, traj, dt=0.20)
+    u = Universe(topo, traj)
+    # not the best but works for now
+    # u = Universe(topo, traj)
     u.add_TopologyAttr('name', atom_names)
 
     return u
 
 
 def average_rdf(type, topo, traj, pdb_name, ag1, ag2, last_frames, output_file_name):
-    last_frames = int(last_frames)
+    last_frames = int(float(last_frames))
     u = get_universe_with_names(topo, traj, pdb_name)
 
-    atom_group1 = u.select_atoms(ag1)
-    atom_group2 = u.select_atoms(ag2)
+    atom_group1 = u.select_atoms(ag1, updating = True)
+    atom_group2 = u.select_atoms(ag2, updating = True)
 
     if "w" in type:
         ss_rdf = rdf.InterRDF(atom_group1, atom_group2, exclusion_block=(1, 1))
@@ -269,8 +228,9 @@ def average_rdf(type, topo, traj, pdb_name, ag1, ag2, last_frames, output_file_n
 
 
 if __name__ == '__main__':
+    # Call python file as: python average_RDF.py type_of_calc topology_file trajectory_file pdb_file resids1 .. reidsN (depends on how many are needed for the calc type) start_calc_at_frame output_name
     if 'dens' in argv[1]:
-        density(argv[2], argv[3], argv[4], argv[5])
+        density(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7])
     elif 'rdf' in argv[1]:
         average_rdf(argv[1], argv[2], argv[3], argv[4], argv[5], argv[6], argv[7], argv[8])
     elif 'hbond' in argv[1]:
@@ -278,6 +238,8 @@ if __name__ == '__main__':
     elif 'rog' in argv[1]:
         # radius_of_gyration(PSF, DCD, "a", "protein", 0, "test")
         radius_of_gyration(argv[2], argv[3], argv[4], argv[5], argv[6])
+    elif 'e2e' in argv[1]:
+        end_to_end(argv[2], argv[3], argv[4], argv[5], argv[6])
     # average_rdf(TPR, XTC)
     # average_rdf('P2.data', 'movie.lammpsdump', 'P2_WaterOnly_1CO2_Polymer_3.5590_6.39_56.028.pdb',
     #             "name XOW and prop z <= 150", "name XOW and prop z <= 150", 'AAA')
