@@ -1,0 +1,113 @@
+# kcal/mol=1.98720413e-3, kJ/mol=K*8.3144621e-3, thermochemical calorie = 4.184 J
+# [real] mass = grams/mole, distance = Angstroms, time = femtoseconds, energy = Kcal/mole, velocity = Angstroms/femtosecond, force = Kcal/mole-Angstrom, torque = Kcal/mole, temperature = degrees K, pressure = atmospheres, dynamic viscosity = Poise, charge = multiple of electron charge (+1.0 is a proton), dipole = charge*Angstroms, electric field = volts/Angstrom, density = gram/cm^dim
+# [metal] mass = grams/mole, distance = Angstroms, time = picoseconds, energy = eV, velocity = Angstroms/picosecond, force = eV/Angstrom, torque = eV, temperature = degrees K, pressure = bars, dynamic viscosity = Poise, charge = multiple of electron charge (+1.0 is a proton), dipole = charge*Angstroms, electric field = volts/Angstrom, density = gram/cm^dim
+units real
+
+boundary p p p  
+dielectric 1.0
+atom_style full
+pair_style lj/cut/tip4p/long 6 5 4 3 0.15 14
+pair_modify mix arithmetic #tail yes
+special_bonds lj/coul 0.0 0.0 0.50
+bond_style harmonic 
+angle_style harmonic 
+dihedral_style opls 
+
+#read_data topology.EtOHH2O.in 
+#read_dump movie.equil1 800000 x y z box yes purge no replace yes trim no add no scaled no format native
+#write_restart restart.equil1
+#quit
+read_restart restart.equil5
+
+########################################
+# pair/bond/angle/dihedral/improper_coeff, group, thermo must come *AFTER* simulation box is defined
+
+#groups for solvents
+group water type 5 6
+group EtOH type 1 2 3 4
+
+
+########################################
+# timestep, thermo, neighbor, dump, region, kspace, fix shake/langevin, pair/bond/angle/dihedral/improper_coeff are *NOT* stored in restart files
+
+### Setup output ###
+thermo 100
+thermo_style custom step temp etotal ke pe econserve epair emol ebond eangle edihed eimp evdwl ecoul elong etail press density
+thermo_modify norm no flush no line multi
+
+#dump_modify movie scale no
+
+restart 5000 restart.1 restart.2
+
+variable etotalc equal etotal
+variable kec equal ke
+variable tempc equal temp
+variable pec equal pe
+variable epairc equal epair
+variable emolc equal emol
+variable ebondc equal ebond
+variable eanglec equal eangle
+variable edihedc equal edihed
+variable eimpc equal eimp
+variable evdwlc equal evdwl
+variable ecoulc equal ecoul
+variable elongc equal elong
+variable etailc equal etail
+variable pressc equal press
+variable volc equal vol
+variable pxxc equal pxx
+variable pyyc equal pyy
+variable pzzc equal pzz
+variable pxyc equal pxy
+variable pxzc equal pxz
+variable pyzc equal pyz
+
+
+fix energy all ave/time 500 2 1000 v_etotalc v_kec v_tempc v_pec v_epairc v_emolc v_ebondc v_eanglec v_edihedc v_eimpc v_evdwlc v_ecoulc v_elongc v_etailc v_pressc v_volc v_pxxc v_pyyc v_pzzc v_pxyc v_pxzc v_pyzc mode scalar ave running file energy.dat
+
+#fix NVE all nve #for troubleshooting
+#fix NVT noAu nvt temp 300 300 100 tchain 1 tloop 1 #activate once troubleshooting is done
+
+fix Rigwat water shake 0.0001 20 100 b 4 a 3
+
+fix NVT all nvt temp 298 298 100
+#fix NPT all npt temp 298 298 100 tchain 1 tloop 1 z 1 1 1000 dilate water
+
+#compute WaterMSD water msd com no
+#fix MSDOutput water ave/time 1 1 500 c_WaterMSD mode vector ave one file WaterMSD.dat
+
+#compute CO2MSD CO2 msd com no
+#fix MSDOutput water ave/time 1 1 500 c_CO2MSD mode vector ave one file CO2msd.dat
+
+#compute RDF all rdf 280 22 *
+#variable WRDF equal c_RDF
+#fix RDFOutput all ave/time 500 1 500 v_WRDF ave running file rdf.dat mode scalar overwrite
+
+#compute RDF all rdf 280 3 1 3 2 3 3 3 4 3 5 3 6 4 1 4 2 4 4 4 5 4 6 5 1 5 2 5 5 5 6 6 1 6 2 6 6
+
+### Setup additional simulation details ###
+kspace_style pppm/tip4p 1e-6
+#kspace_modify mesh 40 36 40 order 5
+
+#velocity all create 300 90123846
+
+neighbor 2.0 bin
+neigh_modify one 9999 delay 10 every 1 check yes once no 
+
+dump movie all custom 100 movie.lammpstrj id mol type xu yu zu
+#dump mydump all atom 500 atom.lammpstrj
+
+#min_style sd
+#minimize 1.0e-4 1.0e-6 100 1000
+
+run_style verlet
+
+timestep 1.0
+
+#run 0 
+
+#velocity all scale 300
+
+run 10000
+
+## Output final values ###
