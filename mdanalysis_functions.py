@@ -6,11 +6,7 @@ from MDAnalysis import Universe
 from MDAnalysis.analysis import rdf
 from MDAnalysis.analysis import lineardensity as lin
 from MDAnalysis.analysis.hydrogenbonds.hbond_analysis import HydrogenBondAnalysis as HBA
-from MDAnalysis.analysis.base import (AnalysisBase,
-                                      AnalysisFromFunction,
-                                      analysis_class)
-from MDAnalysis.analysis import distances
-from math import floor, ceil
+from MDAnalysis.analysis import distances from math import floor, ceil
 
 
 class MDAFunctions:
@@ -291,7 +287,7 @@ class MDAFunctions:
         res_id =[]
         with open(self.pdb) as f:
             pdb_lines = f.readlines()
-        stripped_pdb_lines = [line for line in pdb_lines if (line.startswith('ATOM') or line.startswith('HETATM'))]
+        stripped_pdb_lines = [line for line in pdb_lines if line.startswith('ATOM') or line.startswith('HETATM')]
         self._very_verbose_print("info from PBD: {}".format(stripped_pdb_lines))
         for stripped_line in stripped_pdb_lines:
             atom_names.append(stripped_line[12:16].strip())
