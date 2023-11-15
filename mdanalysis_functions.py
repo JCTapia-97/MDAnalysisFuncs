@@ -91,11 +91,6 @@ class MDAFunctions:
         u = self._mda_universe_generator(traj_list)
         self._verbose_print("Universe has been created!")
         # adds names based on PDB if lammpsdump file
-
-        if self.add_names and not self.xtc_convert:
-            atom_names, _ = self._get_info_from_pdb()
-            u = self._add_names_to_universe(u, atom_names)
-
         self._verbose_print("Total number of frames in Universe: {}".format(u.trajectory.n_frames))
         return u
 
@@ -104,7 +99,7 @@ class MDAFunctions:
         # considering adding implementation to run multiple jobs sequencially, but may not be worth it
         start_time = self._get_time()
         u = self.get_universe()
-        self._total_time(start_time, "Universe creation time")
+        self._time_since(start_time, "Universe creation time")
 
         analysis_functions = {
             'dens': self.density_as_func_z,
@@ -126,7 +121,7 @@ class MDAFunctions:
             MDAFunctions._save_data(output_file_name, analysis_data.T)
             self._very_verbose_print("Data saved for segment {}".format(segment))
         self._file_mover()
-        self._total_time(analysis_start_time, "Analysis time")
+        self._time_since(analysis_start_time, "Analysis time")
 
         acf_start_time = self._get_time()
         if self.time_dependent:
@@ -135,9 +130,9 @@ class MDAFunctions:
             MDAFunctions._save_data(acf_out_file_name, acf_data.T)
             self._very_verbose_print("Data saved for ACF")
         self._file_mover()
-        self._total_time(acf_start_time, "ACF time")
+        self._time_since(acf_start_time, "ACF time")
 
-        self._total_time(start_time, "Total script time")
+        self._time_since(start_time, "Total script time")
 
     ### Analysis function sections 
     # Calculates density across z dimension. Only requires ag1
@@ -296,6 +291,9 @@ class MDAFunctions:
                      topology_format=self.topo_file_type,
                      format=self.traj_file_type,
                      dt=self.dt)
+        if self.add_names:
+            atom_names, _ = self._get_info_from_pdb()
+            u = self._add_names_to_universe(u, atom_names)
         return u
 
     def _add_names_to_universe(self, u, atom_names):
@@ -306,8 +304,6 @@ class MDAFunctions:
 
     def _get_info_from_pdb(self):
         if self.pdb is None:
-        if self.pdb is None:
-            raise FileNotFoundError("PDB is required to add names")
             raise FileNotFoundError("PDB is required to add names")
         self._verbose_print("Getting info from pdb")
         atom_names = []
@@ -513,7 +509,7 @@ class MDAFunctions:
             time_now = None
         return time_now
 
-    def _total_time(self, start, message):
+    def _time_since(self, start, message):
         if self.time:
             end = time.time()
             total_time = start - end
