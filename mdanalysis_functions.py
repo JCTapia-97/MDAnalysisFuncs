@@ -27,22 +27,22 @@ class MDAFunctions:
                  verbose=False,
                  very_verbose=False):
 
-        self.topology = args.topology
-        self.trajectory = args.trajectory
-        self.pdb = args.pdb_file
-        self.ag1 = args.atomgroup1
-        self.ag2 = args.atomgroup2
-        self.start_from_frame = args.start_from_frame
-        self.segment = args.segment
-        self.topo_file_type = args.topo_file_type
-        self.traj_file_type = args.traj_file_type
-        self.outfile_name = args.outfile_name
-        self.analysis_type = args.function 
-        self.exclusion = args.rdf_exclusion
-        self.dt = args.timestep
+        self.topology = topology
+        self.trajectory = trajectory
+        self.pdb = pdb_file
+        self.ag1 = atomgroup1
+        self.ag2 = atomgroup2
+        self.start_from_frame = start_from_frame
+        self.segment = segment
+        self.topo_file_type = topo_file_type
+        self.traj_file_type = traj_file_type
+        self.outfile_name = outfile_name
+        self.analysis_type = function
+        self.exclusion = rdf_exclusion
+        self.dt = timestep
 
-        self.verbose = args.verbose
-        self.very_verbose = args.very_verbose
+        self.verbose = verbose
+        self.very_verbose = very_verbose
         
         self.time_dependent = False
 
@@ -78,12 +78,7 @@ class MDAFunctions:
     def get_universe(self): 
         traj_list = MDAFunctions._str_to_list(self.trajectory)
         self._verbose_print("Trajectory list is {}".format(traj_list))
-        u = Universe(self.topology,
-                     traj_list,
-                     topology_format=self.topo_file_type,
-                     format=self.traj_file_type,
-                     dt=self.dt)
-        
+        u = self._mda_universe_generator(traj_list)
         self._verbose_print("Universe has been created!")
         # adds names based on PDB if lammpsdump file
         
@@ -276,15 +271,23 @@ class MDAFunctions:
         data_labels = self._data_label_maker("Lag", "ACF")
         condensed_data = self._data_condenser(data_labels, lags, acf)
 
-        return condensed_data 
+        return condensed_data
 
     ### Helper Functions sections ###
 
     ### Functions that modify Universe parameters
+    def _mda_universe_generator(self, traj_file):
+        u = Universe(self.topology,
+                     traj_file,
+                     topology_format=self.topo_file_type,
+                     format=self.traj_file_type,
+                     dt=self.dt)
+        return u
+
     def _get_info_from_pdb(self):
         self._verbose_print("Getting info from pdb")
         atom_names = []
-        res_id =[]
+        res_id = []
         with open(self.pdb) as f:
             pdb_lines = f.readlines()
         stripped_pdb_lines = [line for line in pdb_lines if line.startswith('ATOM') or line.startswith('HETATM')]
@@ -299,7 +302,7 @@ class MDAFunctions:
         self._very_verbose_print("Unique RESIDs: {}".format(unique_resids))
         return unique_resids
 
-    @staticmethod         
+    @staticmethod
     def _get_frame_numbers(starting_frame, ending_frame):
         frame_list = np.arange(start=(starting_frame+1), stop=(ending_frame+1), step=1).astype(float)
         return frame_list
@@ -325,14 +328,24 @@ class MDAFunctions:
         else:
             z_cutoff = float(ag2.split()[-1])
         return z_cutoff
-    
+
     @staticmethod
     def _get_frame_limits(segment):
         starting_frame = segment[0]
-        ending_frame = segment[1] 
+        ending_frame = segment[1]
         return starting_frame, ending_frame
 
     ### File associated helper functions ###
+    def _xtc_converter(self, traj_files)
+        xtc_traj_file = []
+        for traj_file in traj_files:
+            xtc_traj_file.append(traj_file)
+            u = self._mda_universe_generator(traj_file)
+            with MDAnalysis.Writer("{}.xtc".format(traj_file, u.n_atoms) as f:
+                for ts in u.trajectory:
+                    f.write(u)
+    return xtc_traj_file
+
     def output_file_name_maker(self, seg):
         output_file_name = "{}_{}".format(self.outfile_name, seg)
         return output_file_name
