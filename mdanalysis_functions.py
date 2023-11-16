@@ -362,7 +362,7 @@ class MDAFunctions:
         for traj_file in traj_files:
             xtc_traj_file.append(traj_file)
             u = self._mda_universe_generator(traj_file)
-            with Writer("{}.xtc".format(traj_file), u.n_atoms) as f:
+            with Writer("{}.xtc".format(traj_file), u.atoms.n_atoms) as f:
                 for ts in u.trajectory:
                     f.write(u)
         return xtc_traj_file
@@ -519,7 +519,7 @@ class MDAFunctions:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Runs various MD analysis scripts for analysizing MD systems")
     parser.add_argument('--topology', '-topo', type=str, help='Topology input file, for LAMMPS foo.data', default=None)
-    parser.add_argument('--trajectory', '-trj', type=str, help='Trajectory input file, for LAMMPS foo.lammpsdump', default=None)
+    parser.add_argument('--trajectory', '-traj', type=str, help='Trajectory input file, for LAMMPS foo.lammpsdump', default=None)
     parser.add_argument('--atomgroup1', '-ag1', type=str, help='Atom group 1 for MD Analysis', default=None)
     parser.add_argument('--atomgroup2', '-ag2', type=str, help='Atom group 2 for MD analysis (used with hbond and e2e. optional with rdf)', default=None)
     parser.add_argument('--start_from_frame', '-sf', type=int, help='Start analysis from frame X. should be a negative Int if you want to start last X frames', default=-1)
@@ -539,7 +539,7 @@ if __name__ == '__main__':
     parser.add_argument('--very_verbose', '-vv', action='store_true', help='displays even more information', default=False)
     parser.add_argument('--time', '-t', action='store_true', help='times length of functions', default=False)
 
-    args = parser.parse_args
+    args = parser.parse_args()
 
     clf = MDAFunctions(topology=args.topology,
                        trajectory=args.trajectory,
