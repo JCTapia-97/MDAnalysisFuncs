@@ -504,14 +504,14 @@ class MDAFunctions:
 
     def _get_time(self):
         if self.time:
-            time_now = time.time()
+            time_now = time.perf_counter()
         else:
             time_now = None
         return time_now
 
     def _time_since(self, start, message):
         if self.time:
-            end = time.time()
+            end = time.perf_counter()
             total_time = start - end
             print("{}:{} s".format(message, total_time))
 
