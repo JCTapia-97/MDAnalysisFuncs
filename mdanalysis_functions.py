@@ -557,6 +557,7 @@ if __name__ == '__main__':
                        verbose=args.verbose,
                        very_verbose=args.very_verbose,
                        time=args.time,
-                       xtc_convert=args.convertXTC)
+                       xtc_convert=args.convertXTC,
+                       add_names=args.addnames)
 
     clf.run_analysis()
