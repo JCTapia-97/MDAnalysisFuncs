@@ -6,7 +6,9 @@ from MDAnalysis import Universe
 from MDAnalysis.analysis import rdf
 from MDAnalysis.analysis import lineardensity as lin
 from MDAnalysis.analysis.hydrogenbonds.hbond_analysis import HydrogenBondAnalysis as HBA
-from MDAnalysis.analysis import distances from math import floor, ceil
+from MDAnalysis.analysis import distances
+from MDAnalysis import Writer
+from math import floor, ceil
 
 
 class MDAFunctions:
@@ -25,25 +27,32 @@ class MDAFunctions:
                  rdf_exclusion=None,
                  timestep=None,
                  verbose=False,
-                 very_verbose=False):
+                 very_verbose=False,
+                 time=False,
+                 xtc_convert=False,
+                 add_names=False):
 
-        self.topology = args.topology
-        self.trajectory = args.trajectory
-        self.pdb = args.pdb_file
-        self.ag1 = args.atomgroup1
-        self.ag2 = args.atomgroup2
-        self.start_from_frame = args.start_from_frame
-        self.segment = args.segment
-        self.topo_file_type = args.topo_file_type
-        self.traj_file_type = args.traj_file_type
-        self.outfile_name = args.outfile_name
-        self.analysis_type = args.function 
-        self.exclusion = args.rdf_exclusion
-        self.dt = args.timestep
+        self.topology = topology
+        self.trajectory = trajectory
+        self.pdb = pdb_file
+        self.ag1 = atomgroup1
+        self.ag2 = atomgroup2
+        self.start_from_frame = start_from_frame
+        self.segment = segment
+        self.topo_file_type = topo_file_type
+        self.traj_file_type = traj_file_type
+        self.outfile_name = outfile_name
+        self.analysis_type = function
+        self.exclusion = rdf_exclusion
+        self.dt = timestep
 
-        self.verbose = args.verbose
-        self.very_verbose = args.very_verbose
-        
+        self.xtc_convert = xtc_convert
+        self.add_names = add_names
+
+        self.verbose = verbose
+        self.very_verbose = very_verbose
+        self.time = time
+
         self.time_dependent = False
 
         self._verbose_print("""Initializing MDAFunctions:
@@ -60,75 +69,70 @@ class MDAFunctions:
               segmentd {} time(s)
               Output file name = {}
               RDF Exclusion = {}""".format(self.topology,
-              self.topo_file_type,
-              self.trajectory,
-              self.traj_file_type,
-              self.pdb,
-              self.analysis_type,
-              self.ag1,
-              self.ag2,
-              self.start_from_frame,
-              self.dt,
-              self.segment,
-              self.topo_file_type,
-              self.outfile_name,
-              self.exclusion))
+                                           self.topo_file_type,
+                                           self.trajectory,
+                                           self.traj_file_type,
+                                           self.pdb,
+                                           self.analysis_type,
+                                           self.ag1,
+                                           self.ag2,
+                                           self.start_from_frame,
+                                           self.dt,
+                                           self.segment,
+                                           self.outfile_name,
+                                           self.exclusion))
 
     # Generates universe based on topology and trajectory. If lammpsdump file is used a PDB must be supplied for names
-    def get_universe(self): 
+    def get_universe(self):
         traj_list = MDAFunctions._str_to_list(self.trajectory)
         self._verbose_print("Trajectory list is {}".format(traj_list))
-        u = Universe(self.topology,
-                     traj_list,
-                     topology_format=self.topo_file_type,
-                     format=self.traj_file_type,
-                     dt=self.dt)
-        
+        if self.xtc_convert:
+            traj_list = self._xtc_converter(traj_list)
+        u = self._mda_universe_generator(traj_list)
         self._verbose_print("Universe has been created!")
         # adds names based on PDB if lammpsdump file
-        
-        if self.traj_file_type == "lammpsdump":
-            if self.pdb is None:
-                raise FileNotFoundError("PDB is required with LAMMPS traj file")    
-            atom_names, _ = self._get_info_from_pdb()
-            self._very_verbose_print("atom names are as follows:{}".format(atom_names))
-            u.add_TopologyAttr('name', atom_names)
-            self._verbose_print("Names added from PBD file!")
-
-        self._verbose_print("Total number of frames in Universe: {}".format(u.trajectory.n_frames)) 
+        self._verbose_print("Total number of frames in Universe: {}".format(u.trajectory.n_frames))
         return u
 
     # Runs analysis and generated output files
     def run_analysis(self):
-        #considering adding implementation to run multiple jobs sequencially, but may not be worth it
+        # considering adding implementation to run multiple jobs sequencially, but may not be worth it
+        start_time = self._get_time()
         u = self.get_universe()
+        self._time_since(start_time, "Universe creation time")
 
         analysis_functions = {
-            'dens' : self.density_as_func_z,
-            'rdf' : self.average_rdf,
-            'hbond' : self.hydrogen_bonding,
-            'rog' : self.radius_of_gyration,
-            'e2e' : self.end_to_end
+            'dens': self.density_as_func_z,
+            'rdf': self.average_rdf,
+            'hbond': self.hydrogen_bonding,
+            'rog': self.radius_of_gyration,
+            'e2e': self.end_to_end
         }
         analysis_function = analysis_functions.get(self.analysis_type)
 
         if analysis_function is None:
             raise ValueError("Analysis function are limited to dens, rdf, hbond, rog, e2e")
-            
+
         segment_list = self._traj_segmenter()
+        analysis_start_time = self._get_time()
         for seg_index, segment in enumerate(segment_list):
             analysis_data = analysis_function(u, segment)
             output_file_name = self.output_file_name_maker(seg_index)
             MDAFunctions._save_data(output_file_name, analysis_data.T)
             self._very_verbose_print("Data saved for segment {}".format(segment))
         self._file_mover()
+        self._time_since(analysis_start_time, "Analysis time")
 
-        if self.time_dependent: 
+        acf_start_time = self._get_time()
+        if self.time_dependent:
             acf_data = self.autocorrelation()
             acf_out_file_name = self.output_file_name_maker("ACF")
             MDAFunctions._save_data(acf_out_file_name, acf_data.T)
             self._very_verbose_print("Data saved for ACF")
         self._file_mover()
+        self._time_since(acf_start_time, "ACF time")
+
+        self._time_since(start_time, "Total script time")
 
     ### Analysis function sections 
     # Calculates density across z dimension. Only requires ag1
@@ -140,7 +144,7 @@ class MDAFunctions:
         bin_size = 1
         num_bins = np.floor(z/bin_size).astype(int)
         z_span = MDAFunctions._truncate(2, np.linspace(0, z, num_bins))
- 
+
         atom_group_1 = u.select_atoms(self.ag1)
 
         density_analysis = lin.LinearDensity(atom_group_1, grouping='atoms', binsize=bin_size).run(start=starting_frame, stop=ending_frame)
@@ -155,7 +159,7 @@ class MDAFunctions:
         starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
         self._verbose_print("Starting RDF Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         
-        atom_group_1 = u.select_atoms(self.ag1)  
+        atom_group_1 = u.select_atoms(self.ag1)
         if self.ag2 is None:
             atom_group_2 = u.select_atoms(self.ag1)
         else:
@@ -165,12 +169,12 @@ class MDAFunctions:
         if "prop" in self.ag1 or (self.ag2 is not None and "prop" in self.ag2):
             z_box_length = float(u.dimensions[2])
             z_cutoff = MDAFunctions._limit_finder(self.ag1, self.ag2)
-            z_frac = self._volume_fraction(z_cutoff, z_box_length, self.ag1, self.ag2)        
+            z_frac = self._volume_fraction(z_cutoff, z_box_length, self.ag1, self.ag2)
 
         rdf_analysis = rdf.InterRDF(atom_group_1, atom_group_2, exclusion_block=self.exclusion)
         rdf_analysis.run(start=starting_frame, stop=ending_frame)
 
-        rdf_bins = MDAFunctions._truncate(2,rdf_analysis.results.bins)
+        rdf_bins = MDAFunctions._truncate(2, rdf_analysis.results.bins)
         crdf, num_dens = MDAFunctions._cum_num(rdf_analysis.results.count, len(atom_group_1))
         rdf_results = rdf_analysis.results.rdf
 
@@ -178,7 +182,7 @@ class MDAFunctions:
         rdf_results = self._volume_adjustment(z_frac, rdf_results)
 
         data_labels = self._data_label_maker("r (A)", "g(x)", "G(x)", "Number Density")
-        condensed_data = self._data_condenser(data_labels, rdf_bins, rdf_results, crdf, num_dens) 
+        condensed_data = self._data_condenser(data_labels, rdf_bins, rdf_results, crdf, num_dens)
 
         return condensed_data
 
@@ -228,11 +232,11 @@ class MDAFunctions:
         
         return condensed_data
 
-    # Calculates end-to-end distance. NOTE: terminal atoms must be unique or else it doesn't work    
+    # Calculates end-to-end distance. NOTE: terminal atoms must be unique or else it doesn't work
     def end_to_end(self, u, segment):
         self.time_dependent = True
-        self._verbose_print("Starting end-to-end Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
+        self._verbose_print("Starting end-to-end Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         atom_group_1 = u.select_atoms(self.ag1)
 
         unique_resids = self._extract_unique_resids(atom_group_1)
@@ -276,15 +280,34 @@ class MDAFunctions:
         data_labels = self._data_label_maker("Lag", "ACF")
         condensed_data = self._data_condenser(data_labels, lags, acf)
 
-        return condensed_data 
+        return condensed_data
 
     ### Helper Functions sections ###
 
     ### Functions that modify Universe parameters
+    def _mda_universe_generator(self, traj_file):
+        u = Universe(self.topology,
+                     traj_file,
+                     topology_format=self.topo_file_type,
+                     format=self.traj_file_type,
+                     dt=self.dt)
+        if self.add_names:
+            atom_names, _ = self._get_info_from_pdb()
+            u = self._add_names_to_universe(u, atom_names)
+        return u
+
+    def _add_names_to_universe(self, u, atom_names):
+        self._very_verbose_print("atom names are as follows:{}".format(atom_names))
+        u.add_TopologyAttr('name', atom_names)
+        self._verbose_print("Names added from PBD file!")
+        return u
+
     def _get_info_from_pdb(self):
+        if self.pdb is None:
+            raise FileNotFoundError("PDB is required to add names")
         self._verbose_print("Getting info from pdb")
         atom_names = []
-        res_id =[]
+        res_id = []
         with open(self.pdb) as f:
             pdb_lines = f.readlines()
         stripped_pdb_lines = [line for line in pdb_lines if line.startswith('ATOM') or line.startswith('HETATM')]
@@ -299,7 +322,7 @@ class MDAFunctions:
         self._very_verbose_print("Unique RESIDs: {}".format(unique_resids))
         return unique_resids
 
-    @staticmethod         
+    @staticmethod
     def _get_frame_numbers(starting_frame, ending_frame):
         frame_list = np.arange(start=(starting_frame+1), stop=(ending_frame+1), step=1).astype(float)
         return frame_list
@@ -325,14 +348,25 @@ class MDAFunctions:
         else:
             z_cutoff = float(ag2.split()[-1])
         return z_cutoff
-    
+
     @staticmethod
     def _get_frame_limits(segment):
         starting_frame = segment[0]
-        ending_frame = segment[1] 
+        ending_frame = segment[1]
         return starting_frame, ending_frame
 
     ### File associated helper functions ###
+
+    def _xtc_converter(self, traj_files):
+        xtc_traj_file = []
+        for traj_file in traj_files:
+            xtc_traj_file.append(traj_file)
+            u = self._mda_universe_generator(traj_file)
+            with Writer("{}.xtc".format(traj_file), u.atoms.n_atoms) as f:
+                for ts in u.trajectory:
+                    f.write(u)
+        return xtc_traj_file
+
     def output_file_name_maker(self, seg):
         output_file_name = "{}_{}".format(self.outfile_name, seg)
         return output_file_name
@@ -341,7 +375,7 @@ class MDAFunctions:
         current_dir = os.getcwd()
         destination_path = self._dir_maker(current_dir)
         data_files = os.listdir(current_dir)
-            
+
         for data_file in data_files:
             if self.outfile_name in data_file and data_file != destination_path:
                 source_file_path = os.path.join(current_dir, data_file)
@@ -349,7 +383,7 @@ class MDAFunctions:
                 if os.path.exists(destination_file_path):
                     os.remove(destination_file_path)
                 shutil.move(source_file_path, destination_path)
-        
+
     def _get_data(self):
         data_path, file_list = self._get_file_list()
         data_list = []
@@ -379,7 +413,7 @@ class MDAFunctions:
     @staticmethod
     def _save_data(output_file, data):
         np.savetxt(output_file, data, fmt="%s", delimiter='\t')
-        
+
     def _data_condenser(self, data_labels, *data):
         flattened_data = [data_value if type(data_value) is np.ndarray else sub_data for data_value in data for sub_data in (data_value if isinstance(data_value, list) else [data_value])]
         self._very_verbose_print("Flattened_data:{}".format(flattened_data))
@@ -391,7 +425,7 @@ class MDAFunctions:
     def _data_label_maker(self, *labels):
         self._verbose_print(labels)
         flattened_labels = [label if type(label) is str else str(inner_label) for label in labels for inner_label in (label if type(label) is list else [label])]
-        #flattened_labels = [item for sublist in flattened_labels for item in sublist]
+        # flattened_labels = [item for sublist in flattened_labels for item in sublist]
         self._verbose_print("Flattened Array: {}".format(flattened_labels))
         label_array = np.asanyarray(flattened_labels)
         label_array = label_array[:, np.newaxis]
@@ -441,25 +475,16 @@ class MDAFunctions:
     @staticmethod
     def _cum_num(rdf_count, natoms):
         cumulative_rdf = np.cumsum(rdf_count)
-        number_density = cumulative_rdf / natoms 
+        number_density = cumulative_rdf / natoms
         return cumulative_rdf, number_density
 
     ### H-bonding associated helper functions ###
     def _count_oxygen_in_selection(self, u, start, finish):
         O_atom_count = []
         for ts in u.trajectory[start:finish]:
-            O_atom_count.append(len(u.select_atoms(self.ag2, updating=True)))    
+            O_atom_count.append(len(u.select_atoms(self.ag2, updating=True)))
         O_atom_count = np.asarray(O_atom_count).astype(int)
         return O_atom_count
-
-    ### Verbose mode functions ###
-    def _very_verbose_print(self, message):
-        if self.very_verbose:
-            print(message)
-            
-    def _verbose_print(self, message):
-        if self.verbose or self.very_verbose:
-            print(message)
 
     ### Misc helper functions ###
 
@@ -468,10 +493,33 @@ class MDAFunctions:
     def _str_to_list(input_str):
         return input_str.split()
 
+    ### Debug functions ###
+    def _very_verbose_print(self, message):
+        if self.very_verbose:
+            print(message)
+
+    def _verbose_print(self, message):
+        if self.verbose or self.very_verbose:
+            print(message)
+
+    def _get_time(self):
+        if self.time:
+            time_now = time.perf_counter()
+        else:
+            time_now = None
+        return time_now
+
+    def _time_since(self, start, message):
+        if self.time:
+            end = time.perf_counter()
+            total_time = end - start
+            print("{}:{} s".format(message, total_time))
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Runs various MD analysis scripts for analysizing MD systems")
     parser.add_argument('--topology', '-topo', type=str, help='Topology input file, for LAMMPS foo.data', default=None)
-    parser.add_argument('--trajectory', '-trj', type=str, help='Trajectory input file, for LAMMPS foo.lammpsdump', default=None)
+    parser.add_argument('--trajectory', '-traj', type=str, help='Trajectory input file, for LAMMPS foo.lammpsdump', default=None)
     parser.add_argument('--atomgroup1', '-ag1', type=str, help='Atom group 1 for MD Analysis', default=None)
     parser.add_argument('--atomgroup2', '-ag2', type=str, help='Atom group 2 for MD analysis (used with hbond and e2e. optional with rdf)', default=None)
     parser.add_argument('--start_from_frame', '-sf', type=int, help='Start analysis from frame X. should be a negative Int if you want to start last X frames', default=-1)
@@ -484,13 +532,14 @@ if __name__ == '__main__':
     parser.add_argument('--rdf_exclusion', '-exc', type=lambda x: ast.literal_eval(x), help='Exclusion block used for RDF function written as tuple written "(X,Y)"', default=None)
     parser.add_argument('--timestep', '-dt', type=float, help='time step in ps (1fs = 0.001ps)', default=None)
 
+    parser.add_argument('--convertXTC', '-xtc', action='store_true', help="Converts trajectory files into XTC file format before running simulations", default=False)
+    parser.add_argument('-addnames', '-add', action='store_true', help="Adds atom names to the topology file from a given pdb", default=False)
+
     parser.add_argument('--verbose', '-v', action='store_true', help='Helpful flag for debuging code', default=False)
     parser.add_argument('--very_verbose', '-vv', action='store_true', help='displays even more information', default=False)
+    parser.add_argument('--time', '-t', action='store_true', help='times length of functions', default=False)
 
     args = parser.parse_args()
-    
-    if args.verbose:
-        start = time.time()
 
     clf = MDAFunctions(topology=args.topology,
                        trajectory=args.trajectory,
@@ -506,12 +555,9 @@ if __name__ == '__main__':
                        rdf_exclusion=args.rdf_exclusion,
                        timestep=args.timestep,
                        verbose=args.verbose,
-                       very_verbose=args.very_verbose)
-                       
-    clf.run_analysis()
+                       very_verbose=args.very_verbose,
+                       time=args.time,
+                       xtc_convert=args.convertXTC,
+                       add_names=args.addnames)
 
-    if args.verbose:
-        end = time.time()
-        total_time = (end - start)
-        print("Total Anaylsis Time: {}".format(total_time))
-    
+    clf.run_analysis()
