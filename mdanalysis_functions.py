@@ -235,8 +235,8 @@ class MDAFunctions:
     # Calculates end-to-end distance. NOTE: terminal atoms must be unique or else it doesn't work
     def end_to_end(self, u, segment):
         self.time_dependent = True
-        self._verbose_print("Starting end-to-end Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
+        self._verbose_print("Starting end-to-end Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         atom_group_1 = u.select_atoms(self.ag1)
 
         unique_resids = self._extract_unique_resids(atom_group_1)
@@ -512,7 +512,7 @@ class MDAFunctions:
     def _time_since(self, start, message):
         if self.time:
             end = time.perf_counter()
-            total_time = start - end
+            total_time = end - start
             print("{}:{} s".format(message, total_time))
 
 
