@@ -120,6 +120,7 @@ class MDAFunctions:
             output_file_name = self.output_file_name_maker(seg_index)
             MDAFunctions._save_data(output_file_name, analysis_data.T)
             self._very_verbose_print("Data saved for segment {}".format(segment))
+            self._plot_array(output_file_name)
         self._file_mover()
         self._time_since(analysis_start_time, "Analysis time")
 
@@ -129,6 +130,7 @@ class MDAFunctions:
             acf_out_file_name = self.output_file_name_maker("ACF")
             MDAFunctions._save_data(acf_out_file_name, acf_data.T)
             self._very_verbose_print("Data saved for ACF")
+            self._plot_array(acf_out_file_name)
         self._file_mover()
         self._time_since(acf_start_time, "ACF time")
 
@@ -158,7 +160,6 @@ class MDAFunctions:
     def average_rdf(self, u, segment):
         starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
         self._verbose_print("Starting RDF Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
-        
         atom_group_1 = u.select_atoms(self.ag1)
         if self.ag2 is None:
             atom_group_2 = u.select_atoms(self.ag1)
@@ -181,7 +182,7 @@ class MDAFunctions:
         num_dens = self._volume_adjustment(float(1/z_frac), num_dens)
         rdf_results = self._volume_adjustment(z_frac, rdf_results)
 
-        data_labels = self._data_label_maker("r (A)", "g(x)", "G(x)", "Number Density")
+        data_labels = self._data_label_maker("r (A)", "RDF", "G(x)", "Number Density")
         condensed_data = self._data_condenser(data_labels, rdf_bins, rdf_results, crdf, num_dens)
 
         return condensed_data
@@ -202,7 +203,7 @@ class MDAFunctions:
 
         frame_number = MDAFunctions._get_frame_numbers(starting_frame, ending_frame)
         normalized_hbonds_per_frame = np.divide(hbonds_per_frame, O_atom_count)
-        data_labels = self._data_label_maker("frame number", "H-bonds in frame", "Normalized H-bonds in frame")
+        data_labels = self._data_label_maker("Frame Number", "H-bonds in frame", "Normalized H-bonds in frame")
         condensed_data = self._data_condenser(data_labels, frame_number, hbonds_per_frame, normalized_hbonds_per_frame)
 
         return condensed_data
@@ -213,7 +214,7 @@ class MDAFunctions:
         starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
         self._verbose_print("Starting ROG Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         atom_group_1 = u.select_atoms(self.ag1)
-        
+
         unique_resids = self._extract_unique_resids(atom_group_1)
         individual_rogs = []
         for unique_resid in unique_resids:
@@ -226,10 +227,10 @@ class MDAFunctions:
         rog_data = np.vstack((average_rog, individual_rogs))
         rog_data = MDAFunctions._matrix_to_many_row_vectors(rog_data)
         frame_number = MDAFunctions._get_frame_numbers(starting_frame, ending_frame)
-        
+
         data_labels = self._data_label_maker("Frame Number", "Average", unique_resids)
         condensed_data = self._data_condenser(data_labels, frame_number, rog_data)
-        
+
         return condensed_data
 
     # Calculates end-to-end distance. NOTE: terminal atoms must be unique or else it doesn't work
@@ -250,7 +251,7 @@ class MDAFunctions:
                 distance = output_array[2]
                 individual_e2e.append(distance)
             individual_e2es.append(individual_e2e)
-        
+
         average_e2e = self._averager(individual_e2es)
         print(individual_e2es)
         e2e_data = np.vstack((average_e2e, individual_e2es))
@@ -260,27 +261,42 @@ class MDAFunctions:
         data_labels = self._data_label_maker("Frame Number", "Average", unique_resids)
         condensed_data = self._data_condenser(data_labels, frame_number, e2e_data)
 
-        return condensed_data 
-    
+        return condensed_data
+
     # Calculates ACF based on a time dependent quantity
     def autocorrelation(self):
         self._verbose_print("Starting ACF Analysis")
-        full_data = self._get_data()
-        data = full_data[1][:]
-        centered_data = data - np.average(data)
-        self._very_verbose_print("Centered Data: {}".format(centered_data))
+        full_data_file = "{}_Full_Data".format(self.outfile_name)
+        self._data_combiner(full_data_file)
+        full_data = np.genfromtxt(full_data_file, names=True, delimiter='\t')
+        x_label = full_data.dtype.names[0]
+        y_labels = full_data.dtype.names[1:]
+        acf_labels = []
+        acfs = []
+        lags = np.arange(0, len(full_data[x_label]))
 
-        acf = correlate(centered_data, centered_data, mode='full')
+        for y_label in y_labels:
+            data = full_data[y_label]
+            centered_data = data - np.average(data)
+            self._very_verbose_print("Centered Data: {}".format(centered_data))
 
-        acf /= np.max(np.abs(acf))
+            acf = correlate(centered_data, centered_data, mode='full')
+            acf /= np.max(np.abs(acf))
+            acf = MDAFunctions._trim_list(acf)
+            self._very_verbose_print("ACF results: {}".format(acf))
+            acfs.append(acf)
+            acf_labels.append("ACF_{}".format(y_label))
 
-        lags = np.arange(-len(data)+1, len(data))
-        self._very_verbose_print("ACF results: {} \n Lags: {}".format(acf, lags))
-
-        data_labels = self._data_label_maker("Lag", "ACF")
-        condensed_data = self._data_condenser(data_labels, lags, acf)
+        data_labels = self._data_label_maker("Lag", acf_labels)
+        condensed_data = self._data_condenser(data_labels, lags, acfs)
 
         return condensed_data
+
+    @staticmethod
+    def _trim_list(long_list):
+        last_half = len(long_list) // 2
+        long_list = long_list[last_half:]
+        return long_list
 
     ### Helper Functions sections ###
 
@@ -384,22 +400,31 @@ class MDAFunctions:
                     os.remove(destination_file_path)
                 shutil.move(source_file_path, destination_path)
 
-    def _get_data(self):
+    def _data_combiner(self, out_file):
         data_path, file_list = self._get_file_list()
         data_list = []
-        for _, filename in enumerate(file_list):
+        header_list = None
+        for i, filename in enumerate(file_list):
             file_path = os.path.join(data_path, filename)
+            self._verbose_print("file to open: {}".format(file_path))
+            if header_list is None:
+                header_list = np.genfromtxt(file_path, delimiter='\t', max_rows=1, dtype=str).T
+                self._very_verbose_print("Headers: {}".format(header_list))
             data = np.loadtxt(file_path, skiprows=1, delimiter='\t')
             data_list.append(data)
         concat_data = np.concatenate(data_list, axis=0)
-        self._very_verbose_print("Total Data:{}".format(concat_data))
-        return concat_data.T
+        concat_data = np.vstack((header_list, concat_data))
+        self._save_data(out_file, concat_data)
 
     def _get_file_list(self):
         current_dir = os.getcwd()
         data_path = os.path.join(current_dir, self.outfile_name)
         file_list = os.listdir(data_path)
-        file_list = [data_file for data_file in file_list if data_file.startswith(self.outfile_name) and "ACF" not in data_file]
+        bad_words = ["ACF", "graph", "Full"]
+        file_list = [data_file for data_file in file_list
+                     if data_file.startswith(self.outfile_name)
+                     and all(bad_word not in data_file for bad_word in bad_words)]
+        self._very_verbose_print("Data files to combine: {}".format(file_list))
         file_list.sort()
         return data_path, file_list
 
@@ -447,8 +472,20 @@ class MDAFunctions:
         self._very_verbose_print("Averaged data:{}".format(average_data))
         return average_data
 
+    def _plot_array(self, data_file):
+        self._verbose_print("I'm Graphin here")
+        data = np.genfromtxt(data_file, delimiter='\t', names=True)
+        x_label = data.dtype.names[0]
+        y_labels = data.dtype.names[1:]
+        self._very_verbose_print("All labels to be graphed {}".format(y_labels))
+        for y_label in y_labels:
+            self._very_verbose_print("graphing {}".format(y_label))
+            output_file_name = "{}_graph_{}_v_{}".format(data_file, y_label, x_label)
+            MDAFunctions.grapher(data[x_label], data[y_label], x_label, y_label, output_file_name)
+
     @staticmethod
-    def plotter(x_data, y_data, x_label, y_label, output_file_name):
+    def grapher(x_data, y_data, x_label, y_label, output_file_name):
+        plt.figure(num=y_label)
         plt.plot(x_data, y_data)
         plt.xlabel(x_label)
         plt.ylabel(y_label)
