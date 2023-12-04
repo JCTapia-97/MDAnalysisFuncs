@@ -115,31 +115,33 @@ class MDAFunctions:
 
         segment_list = self._traj_segmenter()
         analysis_start_time = self._get_time()
+
         for seg_index, segment in enumerate(segment_list):
-            analysis_data = analysis_function(u, segment)
+            starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
+            analysis_data = analysis_function(u, starting_frame, ending_frame)
             output_file_name = self.output_file_name_maker(seg_index)
-            MDAFunctions._save_data(output_file_name, analysis_data.T)
-            self._very_verbose_print("Data saved for segment {}".format(segment))
-            self._plot_array(output_file_name)
+            self._make_output_files(output_file_name, analysis_data)
         self._file_mover()
         self._time_since(analysis_start_time, "Analysis time")
 
-        acf_start_time = self._get_time()
         if self.time_dependent:
+            acf_start_time = self._get_time()
             acf_data = self.autocorrelation()
             acf_out_file_name = self.output_file_name_maker("ACF")
-            MDAFunctions._save_data(acf_out_file_name, acf_data.T)
-            self._very_verbose_print("Data saved for ACF")
-            self._plot_array(acf_out_file_name)
-        self._file_mover()
-        self._time_since(acf_start_time, "ACF time")
+            self._make_output_files(acf_out_file_name, acf_data)
+            self._file_mover()
+            self._time_since(acf_start_time, "ACF time")
 
         self._time_since(start_time, "Total script time")
 
+    def _make_output_files(self, output_file_name, data):
+        MDAFunctions._save_data(output_file_name, data.T)
+        self._very_verbose_print("Data saved for {}".format(output_file_name))
+        self._plot_array(output_file_name)
+
     ### Analysis function sections 
     # Calculates density across z dimension. Only requires ag1
-    def density_as_func_z(self, u, segment):
-        starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
+    def density_as_func_z(self, u, starting_frame, ending_frame):
         self._verbose_print("Starting Density Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
 
         z = float(u.dimensions[2])
@@ -157,8 +159,7 @@ class MDAFunctions:
         return condensed_data
 
     # Calculates RDF requires only ag1 to be specified but ag2 can be specified as well
-    def average_rdf(self, u, segment):
-        starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
+    def average_rdf(self, u, starting_frame, ending_frame):
         self._verbose_print("Starting RDF Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         atom_group_1 = u.select_atoms(self.ag1)
         if self.ag2 is None:
@@ -188,11 +189,10 @@ class MDAFunctions:
         return condensed_data
 
     # Calculates average number of H-bonds in the simulation. Requires ag1 be hydrogen and ag2 be oxygen
-    def hydrogen_bonding(self, u, segment):
+    def hydrogen_bonding(self, u, starting_frame, ending_frame):
         self.time_dependent = True
         if "OW" in self.ag1 or "HW" in self.ag2:
             raise ValueError("For H-bond analysis, ag1 must be Hydrogen and ag2 must be Oxygen. Change atom selection or atom naming to remove O from ag1 and H from ag2")
-        starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
         self._verbose_print("Starting H-bonding Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
 
         O_atom_count = self._count_oxygen_in_selection(u, starting_frame, ending_frame)
@@ -209,9 +209,8 @@ class MDAFunctions:
         return condensed_data
 
     # Calculates radius of gyration. Only uses ag1
-    def radius_of_gyration(self, u, segment):
+    def radius_of_gyration(self, u, starting_frame, ending_frame):
         self.time_dependent = True
-        starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
         self._verbose_print("Starting ROG Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         atom_group_1 = u.select_atoms(self.ag1)
 
@@ -234,9 +233,8 @@ class MDAFunctions:
         return condensed_data
 
     # Calculates end-to-end distance. NOTE: terminal atoms must be unique or else it doesn't work
-    def end_to_end(self, u, segment):
+    def end_to_end(self, u, starting_frame, ending_frame):
         self.time_dependent = True
-        starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
         self._verbose_print("Starting end-to-end Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
         atom_group_1 = u.select_atoms(self.ag1)
 
@@ -366,7 +364,7 @@ class MDAFunctions:
         return z_cutoff
 
     @staticmethod
-    def _get_frame_limits(segment):
+    def _get_frame_limits(starting_frame, ending_frame):
         starting_frame = segment[0]
         ending_frame = segment[1]
         return starting_frame, ending_frame
