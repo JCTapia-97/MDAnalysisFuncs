@@ -358,13 +358,30 @@ class MDAFunctions:
     @staticmethod
     def _limit_finder(ag1, ag2):
         if "prop" in ag1:
-            z_cutoff = float(ag1.split()[-1])
+            z_cutoff = MDAFunctions._extract_limit_from_string(ag1)
+        elif 'prop' in ag2:
+            z_cutoff = MDAFunctions._extract_limit_from_string(ag2)
         else:
-            z_cutoff = float(ag2.split()[-1])
+            raise ValueError("keyword 'prop' expected in ag1 or ag2 but was not found")
         return z_cutoff
 
     @staticmethod
-    def _get_frame_limits(starting_frame, ending_frame):
+    def _extract_limit_from_string(input_string):
+        pattern = r'prop\s*([><]=?)\s*(\d+)'
+        matches = re.findall(pattern, input_string)
+
+        extracted_values = []
+
+        if matches:
+            operators, values = zip(*matches)
+            if len(operators) == 1:
+                extracted_values.append(int(values[0]))
+            else:
+                extracted_values.extend([int(values[0]), int(values[1])])
+        return extracted_values
+
+    @staticmethod
+    def _get_frame_limits(segment):
         starting_frame = segment[0]
         ending_frame = segment[1]
         return starting_frame, ending_frame
@@ -497,13 +514,16 @@ class MDAFunctions:
 
     def _volume_fraction(self, z_cutoff, total_z_length, ag1, ag2):
         self._verbose_print("fixing void fraction")
-        if z_cutoff >= total_z_length:
-            raise ValueError("z cutoff is unphysical. z cutoff ({}) must be <= z box ({}),"
-                  " using z_frac =2 ".format(z_cutoff, total_z_length))
-        elif '>' in ag1 or '>' in ag2:
-            z_frac = (total_z_length - z_cutoff) / total_z_length
-        elif '<' in ag1 or '<' in ag2:
-            z_frac = z_cutoff / total_z_length
+        z_total = sum(z_cutoff)
+        if z_total >= total_z_length:
+            raise ValueError("z cutoff(s) are unphysical. z cutoff ({}) must be <= z box ({}),"
+                  " please change bounds ".format(z_total, total_z_length))
+        elif '>' in ag1 and '<' in ag1 or (ag2 is not None and '>' in ag2 and '<' in ag2):
+            z_frac = (total_z_length - z_cutoff[0] - z_cutoff[1]) / total_z_length
+        elif '>' in ag1 or (ag2 is not None and '>' in ag2):
+            z_frac = (total_z_length - z_cutoff[0]) / total_z_length
+        elif '<' in ag1 or (ag2 is not None and '<' in ag2):
+            z_frac = z_cutoff[0] / total_z_length
         self._verbose_print("Fraction considered:{}".format(z_frac))
         return z_frac
 
