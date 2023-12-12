@@ -7,7 +7,9 @@ from MDAnalysis.analysis import rdf
 from MDAnalysis.analysis import lineardensity as lin
 from MDAnalysis.analysis.hydrogenbonds.hbond_analysis import HydrogenBondAnalysis as HBA
 from MDAnalysis.analysis import distances
+from MDAnalysis.analysis import density
 from MDAnalysis import Writer
+from MDAnalysis import transformations as trans
 from math import floor, ceil
 
 
@@ -262,6 +264,34 @@ class MDAFunctions:
         condensed_data = self._data_condenser(data_labels, frame_number, e2e_data)
 
         return condensed_data
+
+    def density_xy(self, u, starting_frame, ending_frame):
+        self._verbose_print("Starting 2-D averaging from frame {} to frame {}".format(starting_frame, ending_frame))
+        solvent_group = u.select_atoms(self.ag1)
+        solvated_group = u.select_atoms(self.ag2)
+        u = self._preprocess_center_solvated_group(u, solvent_group, solvated_group)
+
+        dens = density.DensityAnalysis(solvent_group, delta=1.0, padding=1)
+        dens.run(start=starting_frame, stop=ending_frame)
+        grid = dens.results.density.grid
+
+        avg = grid.mean(axis=-1)
+        fig, ax = plt.subplots()
+        im = ax.imshow(avg)
+        cbar = plt.colorbar(im)
+        cbar.set_label('Density')
+        plt.xlabel('X-axis (A)')
+        plt.ylabel('Y-axis')
+        plt.savefig('Test')
+
+    def _preprocess_center_solvated_group(self, u, solvent_group, solvated_group):
+        traj_transformations = [trans.unwrap(u.atoms),
+                                trans.center_in_box(solvated_group, center="geometry"),
+                                trans.wrap(solvent_group, compound='residues'),
+                                trans.fit_rot_trans(solvated_group, solvated_group, weights='mass')]
+
+        u.trajectory.add_transformations(*traj_transformations)
+        return u
 
     # Calculates ACF based on a time dependent quantity
     def autocorrelation(self):
