@@ -145,14 +145,15 @@ class MDAFunctions:
         self._verbose_print("Starting Density Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
 
         z = float(u.dimensions[2])
-        bin_size = 1
-        num_bins = np.floor(z/bin_size).astype(int)
-        z_span = MDAFunctions._truncate(2, np.linspace(0, z, num_bins))
+        num_bins = 200
+        bin_size = z / num_bins
+        z_span = MDAFunctions._truncate(2, np.linspace(0, z, (num_bins - 1)))
 
         atom_group_1 = u.select_atoms(self.ag1)
 
         density_analysis = lin.LinearDensity(atom_group_1, grouping='atoms', binsize=bin_size).run(start=starting_frame, stop=ending_frame)
         density_results = density_analysis.results['z']['mass_density']
+        self._verbose_print("Density results: {}".format(density_results))
         data_labels = self._data_label_maker("z-box length (A)", "Density (g/ml)")
         condensed_data = self._data_condenser(data_labels, z_span, density_results)
 
@@ -170,8 +171,9 @@ class MDAFunctions:
         z_frac = 1
         if "prop" in self.ag1 or (self.ag2 is not None and "prop" in self.ag2):
             z_box_length = float(u.dimensions[2])
-            z_cutoff = MDAFunctions._limit_finder(self.ag1, self.ag2)
+            z_cutoff = self._limit_finder(self.ag1, self.ag2)
             z_frac = self._volume_fraction(z_cutoff, z_box_length, self.ag1, self.ag2)
+            print(z_frac)
 
         rdf_analysis = rdf.InterRDF(atom_group_1, atom_group_2, exclusion_block=self.exclusion)
         rdf_analysis.run(start=starting_frame, stop=ending_frame)
@@ -355,30 +357,26 @@ class MDAFunctions:
         self._verbose_print("Segments analysized are the following: {}".format(segment_step_list))
         return segment_step_list
 
-    @staticmethod
-    def _limit_finder(ag1, ag2):
+    def _limit_finder(self, ag1, ag2=None):
         if "prop" in ag1:
             z_cutoff = MDAFunctions._extract_limit_from_string(ag1)
-        elif 'prop' in ag2:
+        elif ag2 is not None and 'prop' in ag2:
             z_cutoff = MDAFunctions._extract_limit_from_string(ag2)
         else:
             raise ValueError("keyword 'prop' expected in ag1 or ag2 but was not found")
+        self._verbose_print("z_cutoff(s) found to be {}".format(z_cutoff))
         return z_cutoff
 
     @staticmethod
     def _extract_limit_from_string(input_string):
-        pattern = r'prop\s*([><]=?)\s*(\d+)'
+        pattern = r'prop\s\w\s([><]=?)\s(\d+(?:\.\d+)?)'
         matches = re.findall(pattern, input_string)
-
         extracted_values = []
-
         if matches:
-            operators, values = zip(*matches)
-            if len(operators) == 1:
-                extracted_values.append(int(values[0]))
-            else:
-                extracted_values.extend([int(values[0]), int(values[1])])
-        return extracted_values
+            for operator, value in matches:
+                extracted_values.append(float(value))
+
+        return extracted_values if extracted_values else None
 
     @staticmethod
     def _get_frame_limits(segment):
@@ -519,7 +517,7 @@ class MDAFunctions:
             raise ValueError("z cutoff(s) are unphysical. z cutoff ({}) must be <= z box ({}),"
                   " please change bounds ".format(z_total, total_z_length))
         elif '>' in ag1 and '<' in ag1 or (ag2 is not None and '>' in ag2 and '<' in ag2):
-            z_frac = (total_z_length - z_cutoff[0] - z_cutoff[1]) / total_z_length
+            z_frac = (max(z_cutoff) - min(z_cutoff)) / total_z_length
         elif '>' in ag1 or (ag2 is not None and '>' in ag2):
             z_frac = (total_z_length - z_cutoff[0]) / total_z_length
         elif '<' in ag1 or (ag2 is not None and '<' in ag2):
