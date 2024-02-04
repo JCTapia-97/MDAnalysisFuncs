@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
-import heapq
 import numpy as np
-import argparse, re, time, os, shutil, ast
+import argparse, re, time, os, shutil, ast, sys
 from scipy.signal import correlate
 from MDAnalysis import Universe
 from MDAnalysis.analysis import rdf
@@ -882,6 +881,7 @@ class MDAFunctions:
             total_time = end - start
             print("{}:{} s".format(message, total_time))
 
+    sys.setrecursionlimit(9999)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Runs various MD analysis scripts for analysizing MD systems")
