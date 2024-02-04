@@ -1,15 +1,18 @@
 import matplotlib.pyplot as plt
+import heapq
 import numpy as np
 import argparse, re, time, os, shutil, ast
 from scipy.signal import correlate
 from MDAnalysis import Universe
 from MDAnalysis.analysis import rdf
 from MDAnalysis.analysis import lineardensity as lin
-from MDAnalysis.analysis.hydrogenbonds.hbond_analysis import HydrogenBondAnalysis as HBA
+from MDAnalysis.analysis.hydrogenbonds import HydrogenBondAnalysis as HBA
 from MDAnalysis.analysis import distances
+from MDAnalysis.lib.distances import calc_angles
 from MDAnalysis.analysis import density
 from MDAnalysis import Writer
 from MDAnalysis import transformations as trans
+from clustering import Clustering
 from math import floor, ceil
 
 
@@ -21,6 +24,7 @@ class MDAFunctions:
                  atomgroup1=None,
                  atomgroup2=None,
                  start_from_frame=None,
+                 end_on_frame=None,
                  segment=1,
                  topo_file_type=None,
                  traj_file_type=None,
@@ -32,7 +36,8 @@ class MDAFunctions:
                  very_verbose=False,
                  time=False,
                  xtc_convert=False,
-                 add_names=False):
+                 add_names=False,
+                 hbond_cutoff=None):
 
         self.topology = topology
         self.trajectory = trajectory
@@ -40,6 +45,7 @@ class MDAFunctions:
         self.ag1 = atomgroup1
         self.ag2 = atomgroup2
         self.start_from_frame = start_from_frame
+        self.end_on_frame = end_on_frame
         self.segment = segment
         self.topo_file_type = topo_file_type
         self.traj_file_type = traj_file_type
@@ -47,6 +53,7 @@ class MDAFunctions:
         self.analysis_type = function
         self.exclusion = rdf_exclusion
         self.dt = timestep
+        self.hbond_cutoff = hbond_cutoff
 
         self.xtc_convert = xtc_convert
         self.add_names = add_names
@@ -56,6 +63,7 @@ class MDAFunctions:
         self.time = time
 
         self.time_dependent = False
+        self.transformed = False
 
         self._verbose_print("""Initializing MDAFunctions:
               topology file = {}
@@ -84,7 +92,8 @@ class MDAFunctions:
                                            self.outfile_name,
                                            self.exclusion))
 
-    # Generates universe based on topology and trajectory. If lammpsdump file is used a PDB must be supplied for names
+    # Generates universe based on topology and trajectory.
+    # If lammpsdump file is used a PDB must be supplied for names
     def get_universe(self):
         traj_list = MDAFunctions._str_to_list(self.trajectory)
         self._verbose_print("Trajectory list is {}".format(traj_list))
@@ -93,12 +102,14 @@ class MDAFunctions:
         u = self._mda_universe_generator(traj_list)
         self._verbose_print("Universe has been created!")
         # adds names based on PDB if lammpsdump file
-        self._verbose_print("Total number of frames in Universe: {}".format(u.trajectory.n_frames))
+        self._verbose_print("Total number of frames in Universe: {}".format(
+            u.trajectory.n_frames))
         return u
 
     # Runs analysis and generated output files
     def run_analysis(self):
-        # considering adding implementation to run multiple jobs sequencially, but may not be worth it
+        # considering adding implementation to run multiple jobs sequencially,
+        # but may not be worth it
         start_time = self._get_time()
         u = self.get_universe()
         self._time_since(start_time, "Universe creation time")
@@ -108,18 +119,21 @@ class MDAFunctions:
             'rdf': self.average_rdf,
             'hbond': self.hydrogen_bonding,
             'rog': self.radius_of_gyration,
-            'e2e': self.end_to_end
+            'e2e': self.end_to_end,
+            'oto': self.tetra_order
         }
         analysis_function = analysis_functions.get(self.analysis_type)
 
         if analysis_function is None:
-            raise ValueError("Analysis function are limited to dens, rdf, hbond, rog, e2e")
+            raise ValueError("Analysis function are limited to "
+                             "dens, rdf, hbond, rog, e2e")
 
         segment_list = self._traj_segmenter()
         analysis_start_time = self._get_time()
 
         for seg_index, segment in enumerate(segment_list):
-            starting_frame, ending_frame = MDAFunctions._get_frame_limits(segment)
+            starting_frame, ending_frame = \
+                MDAFunctions._get_frame_limits(segment)
             analysis_data = analysis_function(u, starting_frame, ending_frame)
             output_file_name = self.output_file_name_maker(seg_index)
             self._make_output_files(output_file_name, analysis_data)
@@ -144,73 +158,316 @@ class MDAFunctions:
     ### Analysis function sections 
     # Calculates density across z dimension. Only requires ag1
     def density_as_func_z(self, u, starting_frame, ending_frame):
-        self._verbose_print("Starting Density Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
+        self._verbose_print(
+            "Starting Density Analysis from frame {} to frame {}".format(
+                starting_frame, ending_frame))
 
-        z = float(u.dimensions[2])
-        num_bins = 200
-        bin_size = z / num_bins
-        z_span = MDAFunctions._truncate(2, np.linspace(0, z, (num_bins - 1)))
+        bin_size = 3
 
         atom_group_1 = u.select_atoms(self.ag1)
 
-        density_analysis = lin.LinearDensity(atom_group_1, grouping='atoms', binsize=bin_size).run(start=starting_frame, stop=ending_frame)
+        density_analysis = lin.LinearDensity(atom_group_1,
+                                             grouping='atoms',
+                                             binsize=bin_size)
+        density_analysis.run(start=starting_frame,
+                             stop=ending_frame)
+
+        bin_edges = density_analysis.results.x.hist_bin_edges
         density_results = density_analysis.results['z']['mass_density']
+        bin_centers = bin_edges[:-1] + 0.5
         self._verbose_print("Density results: {}".format(density_results))
-        data_labels = self._data_label_maker("z-box length (A)", "Density (g/ml)")
-        condensed_data = self._data_condenser(data_labels, z_span, density_results)
+
+        data_labels = self._data_label_maker("z-box length (A)",
+                                             "Density (g/ml)")
+
+        condensed_data = self._data_condenser(data_labels,
+                                              bin_centers,
+                                              density_results)
 
         return condensed_data
 
     # Calculates RDF requires only ag1 to be specified but ag2 can be specified as well
     def average_rdf(self, u, starting_frame, ending_frame):
-        self._verbose_print("Starting RDF Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
-        atom_group_1 = u.select_atoms(self.ag1)
+        self._verbose_print(
+            "Starting RDF Analysis from frame {} to frame {}".format(
+                starting_frame, ending_frame))
+        atom_group_1 = u.select_atoms(self.ag1, updating=True)
         if self.ag2 is None:
-            atom_group_2 = u.select_atoms(self.ag1)
+            atom_group_2 = u.select_atoms(self.ag1, updating=True)
         else:
-            atom_group_2 = u.select_atoms(self.ag2)
+            atom_group_2 = u.select_atoms(self.ag2, updating=True)
 
         z_frac = 1
         if "prop" in self.ag1 or (self.ag2 is not None and "prop" in self.ag2):
             z_box_length = float(u.dimensions[2])
             z_cutoff = self._limit_finder(self.ag1, self.ag2)
-            z_frac = self._volume_fraction(z_cutoff, z_box_length, self.ag1, self.ag2)
+            z_frac = self._volume_fraction(z_cutoff,
+                                           z_box_length,
+                                           self.ag1,
+                                           self.ag2)
             print(z_frac)
 
-        rdf_analysis = rdf.InterRDF(atom_group_1, atom_group_2, exclusion_block=self.exclusion)
-        rdf_analysis.run(start=starting_frame, stop=ending_frame)
+        rdf_analysis = rdf.InterRDF(atom_group_1,
+                                    atom_group_2,
+                                    exclusion_block=self.exclusion)
+        rdf_analysis.run(start=starting_frame,
+                         stop=ending_frame)
 
         rdf_bins = MDAFunctions._truncate(2, rdf_analysis.results.bins)
-        crdf, num_dens = MDAFunctions._cum_num(rdf_analysis.results.count, len(atom_group_1))
+        crdf, num_dens = MDAFunctions._cum_num(rdf_analysis.results.count,
+                                               len(atom_group_1))
         rdf_results = rdf_analysis.results.rdf
 
         num_dens = self._volume_adjustment(float(1/z_frac), num_dens)
         rdf_results = self._volume_adjustment(z_frac, rdf_results)
 
-        data_labels = self._data_label_maker("r (A)", "RDF", "G(x)", "Number Density")
-        condensed_data = self._data_condenser(data_labels, rdf_bins, rdf_results, crdf, num_dens)
+        data_labels = self._data_label_maker("r (A)",
+                                             "RDF",
+                                             "G(x)",
+                                             "Number Density")
+        condensed_data = self._data_condenser(data_labels,
+                                              rdf_bins,
+                                              rdf_results,
+                                              crdf, num_dens)
 
         return condensed_data
 
     # Calculates average number of H-bonds in the simulation. Requires ag1 be hydrogen and ag2 be oxygen
     def hydrogen_bonding(self, u, starting_frame, ending_frame):
-        self.time_dependent = True
         if "OW" in self.ag1 or "HW" in self.ag2:
-            raise ValueError("For H-bond analysis, ag1 must be Hydrogen and ag2 must be Oxygen. Change atom selection or atom naming to remove O from ag1 and H from ag2")
-        self._verbose_print("Starting H-bonding Analysis from frame {} to frame {}".format(starting_frame, ending_frame))
+            raise ValueError("For H-bond analysis, ag1 must be Hydrogen and"
+                             "ag2 must be Oxygen. Change atom selection or"
+                             "atom naming to remove O from ag1 and H from ag2")
+        self._verbose_print(
+            "Starting H-bonding Analysis from frame {} to frame {}".format(
+                starting_frame, ending_frame))
 
-        O_atom_count = self._count_oxygen_in_selection(u, starting_frame, ending_frame)
+        u = self._make_whole(u,
+                             self.ag1,
+                             self.ag2)
 
-        hbond_analysis = HBA(universe=u, hydrogens_sel=self.ag1, acceptors_sel=self.ag2)
-        hbond_analysis.run(start=starting_frame, stop=ending_frame)
-        hbonds_per_frame = hbond_analysis.count_by_time()
+        oxy_atoms = u.select_atoms(self.ag2)
+        wat_atoms = u.select_atoms("{} or {}".format(self.ag1, self.ag2))
+        n_oxys = len(oxy_atoms)
 
-        frame_number = MDAFunctions._get_frame_numbers(starting_frame, ending_frame)
-        normalized_hbonds_per_frame = np.divide(hbonds_per_frame, O_atom_count)
-        data_labels = self._data_label_maker("Frame Number", "H-bonds in frame", "Normalized H-bonds in frame")
-        condensed_data = self._data_condenser(data_labels, frame_number, hbonds_per_frame, normalized_hbonds_per_frame)
+        hbonds = HBA(universe=u,
+                     donors_sel=None,
+                     hydrogens_sel=self.ag1,
+                     acceptors_sel=self.ag2,
+                     d_a_cutoff=3.3,
+                     d_h_a_angle_cutoff=113.58,
+                     update_selections=True)
+
+        hbonds.run(start=starting_frame, stop=ending_frame)
+        starting_frame_index = hbonds.results.hbonds[0][0]
+
+        cleaned_data = {}
+
+        for sublist in hbonds.results.hbonds:
+            index = sublist[0]
+            if index not in cleaned_data:
+                cleaned_data[index] = []
+            cleaned_data[index].append([sublist[1], sublist[3]])
+        transformed_data = [value for _, value in sorted(cleaned_data.items())]
+        del cleaned_data
+
+        p_cluster_analysis = Clustering(len(u.atoms))
+
+        z = float(u.dimensions[2])
+        bin_size = 1
+        num_bins = ceil(z / bin_size)
+        z_edges = MDAFunctions._truncate(2, np.linspace(0, z, (num_bins + 1)))
+        z_centers = z_edges[:-1] + 0.5
+
+        donor_counts = np.full(z_centers.size, fill_value=0.0)
+        acceptor_counts = np.full(z_centers.size, fill_value=0.0)
+        oxy_counts = np.full(z_centers.size, fill_value=0.0)
+
+        cluster_edges = np.linspace(0, n_oxys, (n_oxys + 1))
+        cluster_centers = cluster_edges[:-1]
+        p_cluster_counts = np.full(cluster_centers.size, fill_value=0.0)
+        max_moments = np.full(cluster_centers.size, fill_value=0.0)
+        mid_moments = np.full(cluster_centers.size, fill_value=0.0)
+        min_moments = np.full(cluster_centers.size, fill_value=0.0)
+        p_single_cluster_counter = 0
+
+        for frame_index, frame in enumerate(transformed_data):
+            current_frame = int(frame_index + starting_frame_index)
+            u.trajectory[current_frame]
+            atoms_not_in_cluster = len(u.atoms) - len(oxy_atoms.select_atoms("prop z < {}".format(self.hbond_cutoff)))
+            p_single_cluster_counter += atoms_not_in_cluster
+
+            for oxy_atom in oxy_atoms:
+                oxy_zpos = oxy_atom.position[2]
+                oxy_his, *_ = np.histogram(oxy_zpos, bins=z_edges)
+                oxy_counts += oxy_his
+
+            for hbond_pair in frame:
+                donor_ix = int(hbond_pair[0])
+                acceptor_ix = int(hbond_pair[1])
+
+                donor_zpos = MDAFunctions._find_coord(u,
+                                                      "z",
+                                                      donor_ix)
+
+                donor_counts = MDAFunctions._adjust_hist_counts(donor_counts,
+                                                                z_edges,
+                                                                donor_zpos)
+
+                acceptor_zpos = MDAFunctions._find_coord(u,
+                                                         "z",
+                                                         acceptor_ix)
+
+                acceptor_counts = MDAFunctions._adjust_hist_counts(acceptor_counts,
+                                                                   z_edges,
+                                                                   acceptor_zpos)
+
+                if donor_zpos < self.hbond_cutoff:
+                    p_cluster_analysis.merge(donor_ix, acceptor_ix)
+
+            p_cluster_analysis.rebuild
+            p_clusters = p_cluster_analysis.get_all_clusters()
+
+            for p_cluster in p_clusters:
+                p_cluster_size = len(p_cluster)
+                p_cluster_counts = MDAFunctions._adjust_hist_counts(p_cluster_counts,
+                                                                    cluster_edges,
+                                                                    p_cluster_size)
+                oxy_selection = ' or '.join([f"index {i}" for i in p_cluster])
+                oxy_only_inertia_atomgroup = oxy_atoms.select_atoms("prop z < {} and {}".format(self.hbond_cutoff, oxy_selection))
+                if oxy_only_inertia_atomgroup:
+                    water_res_ids = oxy_only_inertia_atomgroup.atoms.resids
+                    water_selection = ' or '.join([f"resid {resid}" for resid in water_res_ids])
+                    inertia_atomgroup = wat_atoms.select_atoms("{}".format(water_selection))
+                    inertia_tensor = inertia_atomgroup.moment_of_inertia()
+                    eigen_val, _ = np.linalg.eig(inertia_tensor)
+                    eigen_val = np.sort(eigen_val)[::-1]
+                    print("This is the principal axes {}".format(eigen_val))
+                    max_moments[p_cluster_size] += eigen_val[0]
+                    mid_moments[p_cluster_size] += eigen_val[1]
+                    min_moments[p_cluster_size] += eigen_val[2]
+
+            p_cluster_counts[1] -= p_single_cluster_counter
+            p_single_cluster_counter = 0
+            p_cluster_analysis.reset()
+
+        self._very_verbose_print(oxy_counts)
+        total_frames = ending_frame - starting_frame
+        donor_counts /= hbonds.n_frames
+        acceptor_counts /= hbonds.n_frames
+        oxy_counts /= total_frames
+        donor_hbonds = donor_counts / oxy_counts
+        acceptor_hbonds = acceptor_counts / oxy_counts
+        max_moments /= p_cluster_counts
+        mid_moments /= p_cluster_counts
+        min_moments /= p_cluster_counts
+        p_cluster_counts /= total_frames
+        water_in_cluster_prob = p_cluster_counts * cluster_centers
+        total_water_in_clusters = np.sum(water_in_cluster_prob)
+        water_in_cluster_prob /= total_water_in_clusters
+        total_clusters = np.sum(p_cluster_counts)
+        cluster_size_prob = (p_cluster_counts / total_clusters)
+
+        p_donors = np.nan_to_num(donor_hbonds[:self.hbond_cutoff])
+        b_donors = np.nan_to_num(donor_hbonds[self.hbond_cutoff:])
+
+        p_acceptors = np.nan_to_num(acceptor_hbonds[:self.hbond_cutoff])
+        b_acceptors = np.nan_to_num(acceptor_hbonds[self.hbond_cutoff:])
+
+        p_donor_average = np.average(p_donors)
+        b_donor_average = np.average(b_donors)
+
+        p_acceptor_average = np.average(p_acceptors)
+        b_acceptor_average = np.average(b_acceptors)
+
+        averaged_array = np.asarray([p_donor_average, b_donor_average, p_acceptor_average, b_acceptor_average])
+        np.savetxt("{}_averaged_pbHbond_data_{}-{}".format(self.outfile_name, starting_frame, ending_frame), averaged_array)
+
+        data_labels = self._data_label_maker("Cluster Number",
+                                             "Polymer Clusters",
+                                             "Water in Cluster Probability",
+                                             "Cluster Size Probability",
+                                             "max_inertia",
+                                             "mid_inertia",
+                                             "min_inertia")
+        condensed_data = self._data_condenser(data_labels,
+                                              cluster_centers,
+                                              np.nan_to_num(p_cluster_counts),
+                                              water_in_cluster_prob,
+                                              cluster_size_prob,
+                                              np.nan_to_num(max_moments),
+                                              np.nan_to_num(mid_moments),
+                                              np.nan_to_num(min_moments))
 
         return condensed_data
+
+    def tetra_order(self, u, starting_frame, ending_frame):
+        ow_selection = u.select_atoms(self.ag1, updating=True)
+        box_dimension = u.dimensions
+        n_closest_neighbors = 4
+        q_edges = np.linspace(-3, 1, 401)
+        q_centers = q_edges[:-1]
+        q_counts = np.full(q_centers.size, fill_value=0.0)
+        for ts in u.trajectory[starting_frame:ending_frame]:
+            distance_array = distances.distance_array(ow_selection,
+                                                      ow_selection,
+                                                      box=box_dimension)
+
+            distance_array = np.where(distance_array == 0.0, np.inf, distance_array)
+            for central_atom_index, distance_list in enumerate(distance_array):
+                neighbor_indices = np.argpartition(distance_list,
+                                                   n_closest_neighbors)[1:n_closest_neighbors+1]
+                central_atom_coord = ow_selection[central_atom_index].position
+                double_sum = 0
+                for j in range(0, 4):
+                    j_atom_coord = ow_selection[neighbor_indices[j]].position
+                    for k in range(j+1, 4):
+                        k_atom_coord = ow_selection[neighbor_indices[k]].position
+                        angle = calc_angles(j_atom_coord,
+                                            central_atom_coord,
+                                            k_atom_coord,
+                                            box=box_dimension)
+                        double_sum += (np.cos(angle) + 1/3) ** 2
+                q = 1 - (3/8) * double_sum
+                MDAFunctions._adjust_hist_counts(q_counts, q_edges, q)
+
+        q_sum = np.sum(q_counts)
+        q_prob = q_counts/q_sum
+
+        data_labels = self._data_label_maker('q_value',
+                                             'Counts',
+                                             'Probability')
+
+        condensed_data = self._data_condenser(data_labels,
+                                              q_centers,
+                                              q_counts,
+                                              q_prob)
+
+        return condensed_data
+
+    @staticmethod
+    def _get_atom_coords(selection, atom_index):
+        return selection.atoms[int(atom_index)].position
+
+    @staticmethod
+    def _adjust_hist_counts(counts_array, edges, input_data):
+        hist, *_ = np.histogram(input_data, bins=edges)
+        counts_array += hist
+
+        return counts_array
+
+    @staticmethod
+    def _find_coord(u, axis, atom_index):
+        axis_to_int = {
+            "x": 0,
+            "y": 1,
+            "z": 2
+        }
+        dim = axis_to_int[axis]
+        atom = u.atoms[atom_index]
+        coord = atom.position[dim]
+
+        return coord
 
     # Calculates radius of gyration. Only uses ag1
     def radius_of_gyration(self, u, starting_frame, ending_frame):
@@ -374,8 +631,13 @@ class MDAFunctions:
         return frame_list
 
     def _traj_segmenter(self):
-        self._verbose_print("Splicing last {} frames into {} segments".format(self.start_from_frame, self.segment))
-        delta_step = self.start_from_frame / self.segment
+        if self.end_on_frame:
+            self._verbose_print("Splicing frames from {} to {} into {} segments".format(self.start_from_frame, self.end_on_frame, self.segment))
+            total_frames = self.end_on_frame - self.start_from_frame
+            delta_step = total_frames / self.segment
+        else:
+            self._verbose_print("Splicing last {} frames into {} segments".format(self.start_from_frame, self.segment))
+            delta_step = self.start_from_frame / self.segment
         i = 0
         segment_step_list = []
         while i < self.segment:
@@ -413,6 +675,23 @@ class MDAFunctions:
         starting_frame = segment[0]
         ending_frame = segment[1]
         return starting_frame, ending_frame
+
+    def _make_whole(self, u, ag1, ag2=None):
+        if self.transformed:
+            return u
+
+        if ag2 is not None:
+            full_ag = "{} or {}".format(ag1, ag2)
+        else:
+            full_ag = ag1
+        ag = u.select_atoms(full_ag)
+
+        transformations = [trans.unwrap(ag),
+                           trans.wrap(ag, compound='residues')]
+        u.trajectory.add_transformations(*transformations)
+
+        self.transformed = True
+        return u
 
     ### File associated helper functions ###
 
@@ -533,6 +812,7 @@ class MDAFunctions:
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         plt.savefig(output_file_name)
+        plt.clf()
 
     ### RDF associated helper functions ###
     @staticmethod
@@ -542,7 +822,11 @@ class MDAFunctions:
 
     def _volume_fraction(self, z_cutoff, total_z_length, ag1, ag2):
         self._verbose_print("fixing void fraction")
-        z_total = sum(z_cutoff)
+        if len(z_cutoff) == 1:
+            z_total = z_cutoff[0]
+        else:
+            z_total = max(z_cutoff) - min(z_cutoff)
+
         if z_total >= total_z_length:
             raise ValueError("z cutoff(s) are unphysical. z cutoff ({}) must be <= z box ({}),"
                   " please change bounds ".format(z_total, total_z_length))
@@ -606,17 +890,19 @@ if __name__ == '__main__':
     parser.add_argument('--atomgroup1', '-ag1', type=str, help='Atom group 1 for MD Analysis', default=None)
     parser.add_argument('--atomgroup2', '-ag2', type=str, help='Atom group 2 for MD analysis (used with hbond and e2e. optional with rdf)', default=None)
     parser.add_argument('--start_from_frame', '-sf', type=int, help='Start analysis from frame X. should be a negative Int if you want to start last X frames', default=-1)
+    parser.add_argument('--end_on_frame', '-ef', type=int, help='Ends analysis on frame X.', default=None)
     parser.add_argument('--segment', '-seg', type=int, help='If doing block averaging, splits the run into X many groups', default=1)
     parser.add_argument('--topo_file_type', '-toft', type=str, help='Specify the topology file type', default=None)
     parser.add_argument('--traj_file_type', '-trft', type=str, help='Specify the trajectory file type', default=None)
     parser.add_argument('--pdb_file', '-pdb', type=str, help='Specify PDB file. Used to extract atomnames when using lammpsdump files', default=None)
     parser.add_argument('--outfile_name', '-o', type=str, help='Output file name', default=None)
-    parser.add_argument('--function', '-f', type=str, help='Chooses which analysis function to do', choices=['rdf', 'e2e', 'hbond', 'rog', 'dens'], default=None)
+    parser.add_argument('--function', '-f', type=str, help='Chooses which analysis function to do', choices=['rdf', 'e2e', 'hbond', 'rog', 'dens', 'oto'], default=None)
     parser.add_argument('--rdf_exclusion', '-exc', type=lambda x: ast.literal_eval(x), help='Exclusion block used for RDF function written as tuple written "(X,Y)"', default=None)
     parser.add_argument('--timestep', '-dt', type=float, help='time step in ps (1fs = 0.001ps)', default=None)
+    parser.add_argument('--hbond_cutoff', '-hcut', type=int, help='Cutoff value for HBond Analysis', default=None)
 
     parser.add_argument('--convertXTC', '-xtc', action='store_true', help="Converts trajectory files into XTC file format before running simulations", default=False)
-    parser.add_argument('-addnames', '-add', action='store_true', help="Adds atom names to the topology file from a given pdb", default=False)
+    parser.add_argument('--addnames', '-add', action='store_true', help="Adds atom names to the topology file from a given pdb", default=False)
 
     parser.add_argument('--verbose', '-v', action='store_true', help='Helpful flag for debuging code', default=False)
     parser.add_argument('--very_verbose', '-vv', action='store_true', help='displays even more information', default=False)
@@ -629,6 +915,7 @@ if __name__ == '__main__':
                        atomgroup1=args.atomgroup1,
                        atomgroup2=args.atomgroup2,
                        start_from_frame=args.start_from_frame,
+                       end_on_frame=args.end_on_frame,
                        segment=args.segment,
                        topo_file_type=args.topo_file_type,
                        traj_file_type=args.traj_file_type,
@@ -641,6 +928,7 @@ if __name__ == '__main__':
                        very_verbose=args.very_verbose,
                        time=args.time,
                        xtc_convert=args.convertXTC,
-                       add_names=args.addnames)
+                       add_names=args.addnames,
+                       hbond_cutoff=args.hbond_cutoff)
 
     clf.run_analysis()
